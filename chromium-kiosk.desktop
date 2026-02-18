@@ -1,0 +1,7 @@
+[Desktop Entry]
+Type=Application
+Name=YouTube Jukebox Kiosk
+Comment=Open local Jukebox UI in Chromium kiosk mode
+Exec=chromium-browser --kiosk --app=http://localhost:5000 --start-fullscreen --window-position=1920,0 --window-size=1920,1080 --no-first-run --disable-infobars --disable-session-crashed-bubble
+Terminal=false
+X-GNOME-Autostart-enabled=true

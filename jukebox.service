@@ -1,0 +1,19 @@
+[Unit]
+Description=YouTube Jukebox Flask App
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=tui
+Group=tui
+WorkingDirectory=/home/tui/youtube-jukebox
+Environment=PYTHONUNBUFFERED=1
+Environment=JUKEBOX_DISPLAY=:0
+Environment=JUKEBOX_UID=1000
+ExecStart=/usr/bin/python3 /home/tui/youtube-jukebox/app.py
+Restart=always
+RestartSec=2
+
+[Install]
+WantedBy=multi-user.target
