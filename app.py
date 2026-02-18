@@ -762,6 +762,7 @@ def stop_player():
 def _resolve_tool(name):
     candidates = [
         shutil.which(name),
+        os.path.expanduser(f"~/.local/bin/{name}"),
         f"/opt/homebrew/bin/{name}",
         f"/usr/local/bin/{name}",
         f"/usr/bin/{name}",

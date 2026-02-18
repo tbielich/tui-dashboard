@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+export PATH="$HOME/.local/bin:$PATH"
+
 sudo apt-get update
 sudo apt-get install -y \
   python3 \
@@ -16,6 +18,12 @@ fi
 
 if ! command -v yt-dlp >/dev/null 2>&1; then
   python3 -m pip install --user --upgrade yt-dlp
+fi
+
+if ! command -v yt-dlp >/dev/null 2>&1; then
+  if [ -x "$HOME/.local/bin/yt-dlp" ]; then
+    sudo ln -sf "$HOME/.local/bin/yt-dlp" /usr/local/bin/yt-dlp
+  fi
 fi
 
 if ! command -v yt-dlp >/dev/null 2>&1; then
