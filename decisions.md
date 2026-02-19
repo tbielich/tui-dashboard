@@ -128,3 +128,23 @@ Verification after deploy on Pi:
   - `--app=http://localhost:5000`
   - `--window-position=1920,0`
   - `--user-data-dir=/home/tui/.config/chromium-hdmi2`
+
+## 9. Jukebox startup behavior (baseline random by default)
+
+Decision:
+- Jukebox should always start with a random baseline video when the page opens and no active stream is present.
+
+Implementation:
+- Added env-controlled flag in `app.py`:
+  - `AUTO_START_BASELINE` (default `true`)
+- Added JSON route:
+  - `POST /play-baseline-json`
+  - Starts baseline mode and returns current stream metadata for frontend startup.
+- Frontend startup logic now triggers this route automatically if idle.
+
+Verification on Pi:
+- After `jukebox.service` restart and opening `http://localhost:5000` in Chromium:
+  - `GET /` seen in logs
+  - automatic `POST /play-baseline-json` seen in logs
+  - then `GET /stream/current?...` returns `206`
+- This confirms random baseline autostarts without manual button press.
