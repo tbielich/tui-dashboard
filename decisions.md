@@ -84,3 +84,47 @@ Regular reboot setup:
 - On desktop session start, Chromium opens on HDMI-1 with Kibana.
 - SSH access is key-only and hardened.
 - Firewall allows SSH only unless additional ports are explicitly opened.
+
+## 7. Jukebox setup and rollback decisions (2026-02-19)
+
+- Local repository (`main`) now contains Jukebox app and deployment files:
+  - `app.py`
+  - `install.sh`
+  - `jukebox.service`
+  - `chromium-kiosk.desktop`
+  - `README.md`
+- Pi deployment path: `/home/tui/youtube-jukebox`.
+
+Autostart decision:
+- HDMI-2 Jukebox autostart was stopped/removed on request.
+- Active LXDE autostart remains focused on HDMI-1 dashboard startup.
+
+Service/runtime decisions:
+- `jukebox.service` is installed as system service (`/etc/systemd/system/jukebox.service`).
+- Flask app serves on `http://0.0.0.0:5000`.
+- Dependency installation is done via `install.sh` (incl. `yt-dlp` user install in `~/.local/bin`).
+
+## 8. Video playback fix on Pi (403 stream issue)
+
+Observed issue:
+- `/play` succeeded, but `/stream/current` returned `403` for YouTube stream URLs.
+
+Diagnosis:
+- Direct browser fetch of yt-dlp-resolved URL failed with default/web client.
+- Test with yt-dlp extractor arg `youtube:player_client=android` returned `200`.
+
+Implemented fix:
+- In `app.py`, browser stream resolution now uses:
+  - `--extractor-args youtube:player_client=android`
+- Repo commit:
+  - `2969b8c` (`fix: use android player client for browser stream`)
+
+Verification after deploy on Pi:
+- Pi repo hard-synced to `origin/main` (`git reset --hard origin/main`).
+- `jukebox.service` restarted successfully.
+- Stream endpoint now responds with partial content:
+  - `GET /stream/current` -> `206 Partial Content` (`video/mp4`)
+- Chromium Jukebox launched manually on HDMI-2 for test:
+  - `--app=http://localhost:5000`
+  - `--window-position=1920,0`
+  - `--user-data-dir=/home/tui/.config/chromium-hdmi2`
