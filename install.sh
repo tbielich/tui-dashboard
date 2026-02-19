@@ -8,6 +8,7 @@ sudo apt-get install -y \
   python3 \
   python3-flask \
   python3-pip \
+  python3-qrcode \
   mpv \
   chromium-browser \
   curl

@@ -5,6 +5,7 @@ Minimalistische Flask-Webapp fuer Touchscreen-Kiosk:
 - Autosuggest
 - Play-Button
 - Random-Baseline-Button (Spotify Playlist -> zufaelliger Track -> YouTube)
+- QR-Code zur Spotify-Playlist (Tracks per Smartphone hinzufuegen)
 - Wiedergabe mit `mpv` im Fullscreen
 - Immer nur ein aktiver Player
 
@@ -115,6 +116,11 @@ pactl set-default-sink <sink-name>
 
 - UI faellt still auf manuelle Suche zurueck
 - Moegliche Ursachen: DNS/Firewall/Rate-Limit auf Suggest-Endpoint
+
+### QR-Code fehlt
+
+- `python3-qrcode` muss installiert sein (`install.sh` ausfuehren)
+- Test im Browser: `http://localhost:5000/playlist-qr.png`
 
 ### `mpv` startet nicht
 

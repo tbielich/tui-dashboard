@@ -1,5 +1,6 @@
 import atexit
 import base64
+import io
 import json
 import os
 import random
@@ -24,6 +25,11 @@ from flask import (
     stream_with_context,
     url_for,
 )
+
+try:
+    import qrcode
+except ImportError:
+    qrcode = None
 
 app = Flask(__name__)
 
@@ -191,6 +197,44 @@ INDEX_TEMPLATE = """
       pointer-events: none;
       filter: drop-shadow(0 4px 12px rgba(0, 0, 0, 0.35));
     }
+    .qr-card {
+      position: fixed;
+      top: 1rem;
+      left: 1rem;
+      z-index: 7;
+      width: clamp(124px, 15vw, 180px);
+      background: rgba(10, 13, 18, 0.86);
+      border: 1px solid rgba(255, 255, 255, 0.2);
+      border-radius: 12px;
+      padding: 8px;
+      box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+      backdrop-filter: blur(8px);
+    }
+    .qr-title {
+      margin: 0 0 8px;
+      font-size: clamp(0.7rem, 1vw, 0.86rem);
+      color: var(--text);
+      text-align: center;
+    }
+    .qr-image {
+      display: block;
+      width: 100%;
+      height: auto;
+      border-radius: 8px;
+      background: #fff;
+    }
+    .qr-link {
+      margin-top: 6px;
+      display: block;
+      font-size: clamp(0.64rem, 0.9vw, 0.78rem);
+      color: var(--muted);
+      text-align: center;
+      text-decoration: none;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .qr-link:hover { color: var(--text); }
     @keyframes loading-slide {
       0% { left: -35%; }
       100% { left: 100%; }
@@ -291,6 +335,11 @@ INDEX_TEMPLATE = """
 <body>
   <div id="loading-bar" class="loading-bar" aria-hidden="true"></div>
   <img class="brand-logo" src="{{ url_for('static', filename='MTUI.svg') }}" alt="MTUI Logo" />
+  <aside class="qr-card" aria-label="Playlist QR">
+    <p class="qr-title">Tracks zur Playlist</p>
+    <img class="qr-image" src="{{ url_for('playlist_qr') }}" alt="Spotify Playlist QR Code" />
+    <a class="qr-link" href="{{ playlist_url }}" target="_blank" rel="noopener noreferrer">Spotify Playlist</a>
+  </aside>
 
   <div class="bg">
     {% if not video_embed_url or video_stream_ready %}
@@ -1200,6 +1249,34 @@ def index():
         video_title=current_title,
         video_mode=current_mode,
         auto_start_baseline=AUTO_START_BASELINE and PLAYBACK_MODE != "mpv",
+        playlist_url=BASELINE_SPOTIFY_URL,
+    )
+
+
+@app.route("/playlist-qr.png", methods=["GET"])
+def playlist_qr():
+    if not BASELINE_SPOTIFY_URL:
+        return Response("Playlist URL fehlt.", status=404, mimetype="text/plain")
+    if qrcode is None:
+        return Response("QR Modul fehlt (python3-qrcode).", status=503, mimetype="text/plain")
+
+    qr = qrcode.QRCode(
+        version=None,
+        error_correction=qrcode.constants.ERROR_CORRECT_M,
+        box_size=8,
+        border=2,
+    )
+    qr.add_data(BASELINE_SPOTIFY_URL)
+    qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+
+    buffer = io.BytesIO()
+    img.save(buffer, format="PNG")
+    payload = buffer.getvalue()
+    return Response(
+        payload,
+        mimetype="image/png",
+        headers={"Cache-Control": "public, max-age=86400"},
     )
 
 
