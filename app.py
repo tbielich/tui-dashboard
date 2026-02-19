@@ -42,6 +42,10 @@ CURRENT_VIDEO = {
     "query": "",
 }
 PLAYBACK_MODE = os.environ.get("PLAYBACK_MODE", "browser").strip().lower()
+AUTO_START_BASELINE = (
+    os.environ.get("AUTO_START_BASELINE", "1").strip().lower()
+    not in {"0", "false", "no", "off"}
+)
 BASELINE_SPOTIFY_URL = os.environ.get(
     "BASELINE_SPOTIFY_URL",
     "https://open.spotify.com/playlist/1o6pxgjA5affQmUdRSIVuh",
@@ -289,15 +293,16 @@ INDEX_TEMPLATE = """
   <img class="brand-logo" src="{{ url_for('static', filename='MTUI.svg') }}" alt="MTUI Logo" />
 
   <div class="bg">
-    {% if video_stream_ready %}
-      <video
-        id="bg-video-el"
-        src="{{ url_for('stream_current') }}?v={{ video_stream_revision }}"
-        autoplay
-        preload="auto"
-        playsinline
-      ></video>
-    {% elif video_embed_url %}
+    {% if not video_embed_url or video_stream_ready %}
+    <video
+      id="bg-video-el"
+      {% if video_stream_ready %}src="{{ url_for('stream_current') }}?v={{ video_stream_revision }}"{% endif %}
+      autoplay
+      preload="auto"
+      playsinline
+    ></video>
+    {% endif %}
+    {% if video_embed_url and not video_stream_ready %}
       <iframe
         id="bg-video"
         src="{{ video_embed_url }}"
@@ -361,6 +366,7 @@ INDEX_TEMPLATE = """
       const streamRevision = {{ video_stream_revision|tojson }};
       const videoTitle = {{ video_title|tojson }};
       const videoMode = {{ video_mode|tojson }};
+      const autoStartBaseline = {{ auto_start_baseline|tojson }};
       let currentMode = videoMode || '';
       let baselineAdvanceInFlight = false;
       let ytPlayer = null;
@@ -418,6 +424,46 @@ INDEX_TEMPLATE = """
           if (typeof data.query === 'string' && data.query.length) {
             input.value = data.query;
           }
+          const rev = data.stream_revision || Date.now().toString();
+          bgVideoEl.src = `/stream/current?v=${encodeURIComponent(rev)}`;
+          bgVideoEl.load();
+          const p = bgVideoEl.play();
+          if (p && typeof p.catch === 'function') {
+            p.catch(() => showStartOverlay());
+          }
+
+          if ('mediaSession' in navigator) {
+            try {
+              navigator.mediaSession.metadata = new MediaMetadata({
+                title: data.title || 'YouTube Jukebox',
+                artist: 'YouTube',
+                album: 'Jukebox',
+              });
+            } catch (_) {}
+          }
+        } catch (_) {
+          // silent fallback
+        } finally {
+          baselineAdvanceInFlight = false;
+          setLoading(false);
+        }
+      }
+
+      async function startBaselineFromIdle() {
+        if (!autoStartBaseline || baselineAdvanceInFlight || !bgVideoEl) return;
+        baselineAdvanceInFlight = true;
+        setLoading(true);
+        try {
+          const res = await fetch('/play-baseline-json', { method: 'POST' });
+          if (!res.ok) return;
+          const data = await res.json();
+          if (!data || !data.stream_revision) return;
+
+          currentMode = data.mode || 'baseline';
+          if (typeof data.query === 'string' && data.query.length) {
+            input.value = data.query;
+          }
+
           const rev = data.stream_revision || Date.now().toString();
           bgVideoEl.src = `/stream/current?v=${encodeURIComponent(rev)}`;
           bgVideoEl.load();
@@ -508,19 +554,8 @@ INDEX_TEMPLATE = """
         } catch (_) {}
       }
 
-      if (videoStreamReady && bgVideoEl) {
+      if (bgVideoEl) {
         setupMediaSession();
-        setLoading(true);
-        if (streamRevision) {
-          bgVideoEl.src = `/stream/current?v=${encodeURIComponent(streamRevision)}`;
-        }
-        const tryPlay = bgVideoEl.play();
-        if (tryPlay && typeof tryPlay.catch === 'function') {
-          tryPlay.catch(() => {
-            showStartOverlay();
-            setLoading(false);
-          });
-        }
         bgVideoEl.addEventListener('play', hideStartOverlay);
         bgVideoEl.addEventListener('loadstart', () => setLoading(true));
         bgVideoEl.addEventListener('waiting', () => setLoading(true));
@@ -549,6 +584,21 @@ INDEX_TEMPLATE = """
               setLoading(false);
             });
           });
+        }
+        if (videoStreamReady) {
+          setLoading(true);
+          if (streamRevision) {
+            bgVideoEl.src = `/stream/current?v=${encodeURIComponent(streamRevision)}`;
+          }
+          const tryPlay = bgVideoEl.play();
+          if (tryPlay && typeof tryPlay.catch === 'function') {
+            tryPlay.catch(() => {
+              showStartOverlay();
+              setLoading(false);
+            });
+          }
+        } else {
+          startBaselineFromIdle();
         }
       } else if (videoEmbedUrl) {
         window.onYouTubeIframeAPIReady = function () {
@@ -1149,6 +1199,7 @@ def index():
         video_stream_revision=current_stream_revision,
         video_title=current_title,
         video_mode=current_mode,
+        auto_start_baseline=AUTO_START_BASELINE and PLAYBACK_MODE != "mpv",
     )
 
 
@@ -1269,6 +1320,32 @@ def play_baseline():
 
     status = f"Baseline random: {video['title']}"
     return redirect(url_for("index", status=status, query=baseline_query))
+
+
+@app.route("/play-baseline-json", methods=["POST"])
+def play_baseline_json():
+    try:
+        video, baseline_query = play_next_baseline_video()
+    except RuntimeError as exc:
+        return jsonify({"error": str(exc)}), 500
+
+    if not video:
+        return jsonify({"error": "Kein Treffer fuer Baseline-Titel."}), 404
+
+    with STATE_LOCK:
+        stream_url = CURRENT_VIDEO.get("stream_url", "")
+        stream_revision = CURRENT_VIDEO.get("stream_revision", "")
+        mode = CURRENT_VIDEO.get("mode", "")
+
+    return jsonify(
+        {
+            "title": video.get("title", ""),
+            "query": baseline_query,
+            "stream_url": stream_url,
+            "stream_revision": stream_revision,
+            "mode": mode,
+        }
+    )
 
 
 @app.route("/next-baseline", methods=["POST"])
