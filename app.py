@@ -10,9 +10,20 @@ import subprocess
 import threading
 import time
 import urllib.parse
+import urllib.error
 import urllib.request
+from contextlib import suppress
 
-from flask import Flask, jsonify, redirect, render_template_string, request, url_for
+from flask import (
+    Flask,
+    Response,
+    jsonify,
+    redirect,
+    render_template_string,
+    request,
+    stream_with_context,
+    url_for,
+)
 
 app = Flask(__name__)
 
@@ -25,6 +36,8 @@ CURRENT_VIDEO = {
     "title": "",
     "embed_url": "",
     "stream_url": "",
+    "stream_headers": {},
+    "stream_revision": "",
     "mode": "",
     "query": "",
 }
@@ -276,10 +289,10 @@ INDEX_TEMPLATE = """
   <img class="brand-logo" src="{{ url_for('static', filename='MTUI.svg') }}" alt="MTUI Logo" />
 
   <div class="bg">
-    {% if video_stream_url %}
+    {% if video_stream_ready %}
       <video
         id="bg-video-el"
-        src="{{ video_stream_url }}"
+        src="{{ url_for('stream_current') }}?v={{ video_stream_revision }}"
         autoplay
         preload="auto"
         playsinline
@@ -344,7 +357,8 @@ INDEX_TEMPLATE = """
       let timer = null;
       let requestSeq = 0;
       const videoEmbedUrl = {{ video_embed_url|tojson }};
-      const videoStreamUrl = {{ video_stream_url|tojson }};
+      const videoStreamReady = {{ video_stream_ready|tojson }};
+      const streamRevision = {{ video_stream_revision|tojson }};
       const videoTitle = {{ video_title|tojson }};
       const videoMode = {{ video_mode|tojson }};
       let currentMode = videoMode || '';
@@ -404,7 +418,8 @@ INDEX_TEMPLATE = """
           if (typeof data.query === 'string' && data.query.length) {
             input.value = data.query;
           }
-          bgVideoEl.src = data.stream_url;
+          const rev = data.stream_revision || Date.now().toString();
+          bgVideoEl.src = `/stream/current?v=${encodeURIComponent(rev)}`;
           bgVideoEl.load();
           const p = bgVideoEl.play();
           if (p && typeof p.catch === 'function') {
@@ -493,9 +508,12 @@ INDEX_TEMPLATE = """
         } catch (_) {}
       }
 
-      if (videoStreamUrl && bgVideoEl) {
+      if (videoStreamReady && bgVideoEl) {
         setupMediaSession();
         setLoading(true);
+        if (streamRevision) {
+          bgVideoEl.src = `/stream/current?v=${encodeURIComponent(streamRevision)}`;
+        }
         const tryPlay = bgVideoEl.play();
         if (tryPlay && typeof tryPlay.catch === 'function') {
           tryPlay.catch(() => {
@@ -982,6 +1000,60 @@ def resolve_stream_url(video_url, target="mpv"):
     return stream_url
 
 
+def resolve_stream_source_for_browser(video_url):
+    ytdlp = _resolve_tool("yt-dlp")
+    format_selector = (
+        "22/18/"
+        "best[ext=mp4][protocol=https][acodec!=none][vcodec!=none]/"
+        "best[ext=mp4][acodec!=none][vcodec!=none]/"
+        "best[acodec!=none][vcodec!=none]"
+    )
+    cmd = [
+        ytdlp,
+        "-f",
+        format_selector,
+        "--no-playlist",
+        "--print",
+        "URL=%(url)s",
+        "--print",
+        "HEADERS=%(http_headers)j",
+        "--no-warnings",
+        video_url,
+    ]
+    result = subprocess.run(cmd, capture_output=True, text=True, timeout=35)
+
+    if result.returncode != 0:
+        stderr = (result.stderr or "").strip()
+        raise RuntimeError(stderr or "Konnte Browser-Stream nicht aufloesen.")
+
+    stream_url = ""
+    stream_headers = {}
+    for line in result.stdout.splitlines():
+        line = line.strip()
+        if line.startswith("URL="):
+            stream_url = line[4:].strip()
+        elif line.startswith("HEADERS="):
+            raw = line[8:].strip()
+            if raw:
+                with suppress(json.JSONDecodeError):
+                    parsed = json.loads(raw)
+                    if isinstance(parsed, dict):
+                        stream_headers = {str(k): str(v) for k, v in parsed.items() if v}
+
+    if not stream_url:
+        raise RuntimeError("Kein gueltiger Browser-Stream-Link gefunden.")
+
+    if "User-Agent" not in stream_headers:
+        stream_headers["User-Agent"] = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/139.0.0.0 Safari/537.36"
+        )
+    if "Accept" not in stream_headers:
+        stream_headers["Accept"] = "*/*"
+
+    return stream_url, stream_headers
+
+
 def start_player(stream_url):
     global PLAYER_PROCESS
 
@@ -1024,16 +1096,20 @@ def play_video_for_query(query, mode="search"):
             CURRENT_VIDEO["id"] = video["id"]
             CURRENT_VIDEO["title"] = video["title"]
             CURRENT_VIDEO["stream_url"] = ""
+            CURRENT_VIDEO["stream_headers"] = {}
+            CURRENT_VIDEO["stream_revision"] = ""
             CURRENT_VIDEO["embed_url"] = ""
             CURRENT_VIDEO["mode"] = mode
             CURRENT_VIDEO["query"] = query
     else:
-        stream_url = resolve_stream_url(video["url"], target="browser")
+        stream_url, stream_headers = resolve_stream_source_for_browser(video["url"])
         stop_player()
         with STATE_LOCK:
             CURRENT_VIDEO["id"] = video["id"]
             CURRENT_VIDEO["title"] = video["title"]
             CURRENT_VIDEO["stream_url"] = stream_url
+            CURRENT_VIDEO["stream_headers"] = stream_headers
+            CURRENT_VIDEO["stream_revision"] = str(int(time.time() * 1000))
             CURRENT_VIDEO["embed_url"] = ""
             CURRENT_VIDEO["mode"] = mode
             CURRENT_VIDEO["query"] = query
@@ -1057,6 +1133,7 @@ def index():
     with STATE_LOCK:
         current_embed_url = CURRENT_VIDEO.get("embed_url", "")
         current_stream_url = CURRENT_VIDEO.get("stream_url", "")
+        current_stream_revision = CURRENT_VIDEO.get("stream_revision", "")
         current_title = CURRENT_VIDEO.get("title", "")
         current_mode = CURRENT_VIDEO.get("mode", "")
 
@@ -1066,10 +1143,76 @@ def index():
         status=request.args.get("status", ""),
         query=request.args.get("query", ""),
         video_embed_url=current_embed_url,
-        video_stream_url=current_stream_url,
+        video_stream_ready=bool(current_stream_url),
+        video_stream_revision=current_stream_revision,
         video_title=current_title,
         video_mode=current_mode,
     )
+
+
+@app.route("/stream/current", methods=["GET"])
+def stream_current():
+    with STATE_LOCK:
+        stream_url = CURRENT_VIDEO.get("stream_url", "")
+        base_headers = dict(CURRENT_VIDEO.get("stream_headers") or {})
+
+    if not stream_url:
+        return Response("Kein aktiver Stream.", status=404, mimetype="text/plain")
+
+    outbound_headers = {}
+    for key, value in base_headers.items():
+        if not value:
+            continue
+        lk = key.lower()
+        if lk in {"host", "content-length", "accept-encoding", "connection", "range"}:
+            continue
+        outbound_headers[key] = value
+
+    request_range = request.headers.get("Range")
+    if request_range:
+        outbound_headers["Range"] = request_range
+
+    if "User-Agent" not in outbound_headers:
+        outbound_headers["User-Agent"] = "Mozilla/5.0"
+
+    upstream_req = urllib.request.Request(stream_url, headers=outbound_headers, method="GET")
+    try:
+        upstream = urllib.request.urlopen(upstream_req, timeout=30)
+    except urllib.error.HTTPError as exc:
+        body = exc.read()
+        return Response(
+            body,
+            status=exc.code,
+            headers={"Content-Type": exc.headers.get("Content-Type", "text/plain")},
+        )
+    except Exception as exc:
+        return Response(f"Stream proxy error: {exc}", status=502, mimetype="text/plain")
+
+    def generate():
+        try:
+            while True:
+                chunk = upstream.read(64 * 1024)
+                if not chunk:
+                    break
+                yield chunk
+        finally:
+            with suppress(Exception):
+                upstream.close()
+
+    proxied = Response(stream_with_context(generate()), status=getattr(upstream, "status", 200))
+    for header in (
+        "Content-Type",
+        "Content-Length",
+        "Content-Range",
+        "Accept-Ranges",
+        "Cache-Control",
+        "ETag",
+        "Last-Modified",
+    ):
+        value = upstream.headers.get(header)
+        if value:
+            proxied.headers[header] = value
+    return proxied
 
 
 @app.route("/suggest", methods=["GET"])
@@ -1140,6 +1283,7 @@ def next_baseline():
 
     with STATE_LOCK:
         stream_url = CURRENT_VIDEO.get("stream_url", "")
+        stream_revision = CURRENT_VIDEO.get("stream_revision", "")
         mode = CURRENT_VIDEO.get("mode", "")
 
     return jsonify(
@@ -1147,6 +1291,7 @@ def next_baseline():
             "title": video.get("title", ""),
             "query": baseline_query,
             "stream_url": stream_url,
+            "stream_revision": stream_revision,
             "mode": mode,
         }
     )
