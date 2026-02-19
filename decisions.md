@@ -148,3 +148,23 @@ Verification on Pi:
   - automatic `POST /play-baseline-json` seen in logs
   - then `GET /stream/current?...` returns `206`
 - This confirms random baseline autostarts without manual button press.
+
+## 10. QR code for adding tracks to playlist
+
+Decision:
+- Show a scannable QR code in the Jukebox UI that points to the public Spotify baseline playlist:
+  - `https://open.spotify.com/playlist/1o6pxgjA5affQmUdRSIVuh`
+
+Implementation:
+- Added QR overlay card in `app.py` (top-left) with label and playlist link.
+- Added Flask route:
+  - `GET /playlist-qr.png`
+  - Generates PNG QR code dynamically from `BASELINE_SPOTIFY_URL`.
+- Added dependency handling:
+  - `install.sh` installs `python3-qrcode`
+  - `requirements.txt` includes `qrcode[pil]`
+
+Verification on Pi:
+- `GET /playlist-qr.png` returns `200` with `Content-Type: image/png`.
+- QR payload image generated successfully (`/tmp/playlist_qr.png`, 555 bytes in validation run).
+- HDMI-2 Chromium kiosk restarted to load the updated UI with QR overlay.
