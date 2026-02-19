@@ -1012,6 +1012,8 @@ def resolve_stream_source_for_browser(video_url):
         ytdlp,
         "-f",
         format_selector,
+        "--extractor-args",
+        "youtube:player_client=android",
         "--no-playlist",
         "--print",
         "URL=%(url)s",
